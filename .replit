@@ -17,6 +17,7 @@ args = "Run Python Script"
 [[workflows.workflow]]
 name = "Run Python Script"
 author = "agent"
+mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
@@ -24,3 +25,7 @@ args = "python main.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[ports]]
+localPort = 8080
+externalPort = 80
