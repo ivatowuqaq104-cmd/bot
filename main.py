@@ -8,7 +8,7 @@ from threading import Thread
 # ==========================================
 # 1. НАСТРОЙКИ (ВСТАВЬ СВОИ ДАННЫЕ!)
 # ==========================================
-TOKEN = "8566730754:AAGHYmIprrwWQCU6HUqn55XmfRONDg2V4Tk"  # <-- Твой токен
+TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"  # <-- Твой токен
 WHITELIST_IDS = [959119542]       # <-- Твой ID
 USERS_FILE = "users_list.txt"
 
