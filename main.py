@@ -11,7 +11,7 @@ from threading import Thread
 # ==========================================
 TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"
 ADMIN_ID = 959119542          # Твой ID
-WHITELIST_IDS = [959119542]   # Кто может тегать всех
+WHITELIST_IDS = [959119542, 7918250010, 7029781826]   # Кто может тегать всех
 DATA_FILE = "users_db.json"   # Файл базы
 
 logging.basicConfig(level=logging.INFO)
