@@ -2,124 +2,153 @@ import telebot
 import os
 import time
 import logging
+import json
 from flask import Flask
 from threading import Thread
 
 # ==========================================
-# 1. НАСТРОЙКИ (ВСТАВЬ СВОИ ДАННЫЕ!)
+# 1. НАСТРОЙКИ
 # ==========================================
-TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"  # <-- Твой токен
-WHITELIST_IDS = [959119542]       # <-- Твой ID
-USERS_FILE = "users_list.txt"
+TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"
+ADMIN_ID = 959119542          # Твой ID
+WHITELIST_IDS = [959119542]   # Кто может тегать всех
+DATA_FILE = "users_db.json"   # Файл базы
 
-# Настройка логирования (чтобы видеть ошибки в консоли)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(TOKEN)
 
 # ==========================================
-# 2. ВЕБ-СЕРВЕР (ЧТОБЫ UPTIMEROBOT ВИДЕЛ НАС)
+# 2. ВЕБ-СЕРВЕР
 # ==========================================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "I'm alive! Бот работает и ждет команд."
+    return "Bot is running!"
 
 def run():
-    # Запускаем сервер на порту 8080
     try:
         app.run(host='0.0.0.0', port=8080)
     except Exception as e:
-        print(f"Ошибка веб-сервера: {e}")
+        print(f"Server error: {e}")
 
 def keep_alive():
     t = Thread(target=run)
     t.start()
 
 # ==========================================
-# 3. ФУНКЦИИ БОТА
+# 3. ФУНКЦИИ БАЗЫ ДАННЫХ
 # ==========================================
 def load_users():
-    if not os.path.exists(USERS_FILE):
-        return set()
-    with open(USERS_FILE, "r", encoding="utf-8") as f:
-        return set(line.strip() for line in f if line.strip())
-
-def save_user(user_id):
-    users = load_users()
-    if str(user_id) not in users:
-        with open(USERS_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{user_id}\n")
-
-def can_tag(chat_id, user_id):
-    if user_id in WHITELIST_IDS:
-        return True
+    if not os.path.exists(DATA_FILE):
+        return []
     try:
-        member = bot.get_chat_member(chat_id, user_id)
-        if member.status in ['creator', 'administrator']:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("users", [])
+    except:
+        return []
+
+def save_new_user(user_id):
+    """Сохраняет юзера и возвращает True, если он новенький."""
+    users = load_users()
+    if user_id not in users:
+        users.append(user_id)
+        try:
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump({"users": users}, f, indent=4)
             return True
-    except Exception as e:
-        logger.error(f"Ошибка проверки прав: {e}")
+        except Exception as e:
+            logger.error(f"Save error: {e}")
     return False
 
 # ==========================================
-# 4. ОБРАБОТКА СООБЩЕНИЙ
+# 4. КОМАНДА /getfile (ТОЛЬКО ЛИЧКА)
+# ==========================================
+@bot.message_handler(commands=['getfile'])
+def send_file(message):
+    # Игнорируем команды в общих чатах
+    if message.chat.type != 'private':
+        return
+
+    # Проверяем, что пишет Админ
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "rb") as file:
+                bot.send_document(message.chat.id, file, caption="📂 Список участников чата")
+        else:
+            bot.send_message(message.chat.id, "База пуста.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {e}")
+
+# ==========================================
+# 5. ГЛАВНАЯ ЛОГИКА
 # ==========================================
 @bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
+def handle_messages(message):
     try:
-        # 1. Запоминаем ID
-        if message.from_user and not message.from_user.is_bot:
-            save_user(message.from_user.id)
+        if not message.from_user or message.from_user.is_bot:
+            return
 
-        # 2. Проверяем команду
+        user_id = message.from_user.id
+        username = message.from_user.username or message.from_user.first_name
+        chat_type = message.chat.type
         text = message.text.lower() if message.text else ""
-        if text in ['/all', '@all', '/everyone', 'все сюда']:
-            chat_id = message.chat.id
-            user_id = message.from_user.id
 
-            if not can_tag(chat_id, user_id):
-                bot.reply_to(message, "❌ У вас нет прав отмечать всех.")
+        # --- ЛОГИКА 1: СОХРАНЕНИЕ (ТОЛЬКО ИЗ ГРУПП) ---
+        # Мы сохраняем человека, ТОЛЬКО если сообщение пришло из группы
+        if chat_type in ['group', 'supergroup']:
+            is_new = save_new_user(user_id)
+            
+            if is_new:
+                # Уведомляем админа, что в ГРУППЕ появился новый активный игрок
+                try:
+                    alert = (f"🔔 <b>Новый игрок в чате!</b>\n"
+                             f"Кто: @{username}\nID: <code>{user_id}</code>")
+                    bot.send_message(ADMIN_ID, alert, parse_mode='HTML')
+                except:
+                    pass
+        
+        # Если пишут в личку (private) - мы просто игнорируем сохранение.
+        # (Ничего не делаем, база не засоряется)
+
+        # --- ЛОГИКА 2: ОБРАБОТКА @all ---
+        triggers = ['@all', '/all', 'everyone', 'все сюда']
+        
+        if any(t in text for t in triggers):
+            
+            # Проверяем права
+            if user_id not in WHITELIST_IDS:
                 return
 
             users = load_users()
             if not users:
-                bot.reply_to(message, "🤷‍♂️ Я пока никого не запомнил.")
+                bot.reply_to(message, "Список участников пуст.")
                 return
 
-            bot.reply_to(message, "📢 Вызываю всех:")
+            bot.reply_to(message, "📢 <b>Внимание Альянс!</b>", parse_mode='HTML')
 
+            # Рассылка скрытых тегов
             chunk = ""
             count = 0
             for uid in users:
                 chunk += f"[🔔](tg://user?id={uid}) "
                 count += 1
                 if count % 5 == 0:
-                    bot.send_message(chat_id, chunk, parse_mode="Markdown")
+                    bot.send_message(message.chat.id, chunk, parse_mode="Markdown")
                     chunk = ""
-
+            
             if chunk:
-                bot.send_message(chat_id, chunk, parse_mode="Markdown")
+                bot.send_message(message.chat.id, chunk, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"Ошибка в обработчике: {e}")
-
-# ==========================================
-# 5. ГЛАВНЫЙ ЗАПУСК (БЕССМЕРТНЫЙ РЕЖИМ)
-# ==========================================
+        logger.error(f"Error: {e}")
 
 if __name__ == "__main__":
-    # Запускаем веб-сервер в фоновом режиме
     keep_alive()
-
-    # Бесконечный цикл перезапуска бота
-    while True:
-        try:
-            print("🤖 Бот запускается...")
-            bot.infinity_polling(timeout=60, long_polling_timeout=5)
-        except Exception as e:
-            print(f"⚠️ Бот упал с ошибкой: {e}")
-            print("🔄 Перезапуск через 5 секунд...")
-            time.sleep(5)
+    bot.infinity_polling()
