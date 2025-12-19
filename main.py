@@ -26,7 +26,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot v5.0 is running!"
 
 def run():
     try:
@@ -65,64 +65,83 @@ def save_new_user(user_id):
     return False
 
 # ==========================================
-# 4. КОМАНДА /getfile (ТОЛЬКО ЛИЧКА)
+# 4. АДМИНКА: СКАЧАТЬ И ЗАГРУЗИТЬ БАЗУ
 # ==========================================
+
+# --- СКАЧАТЬ БАЗУ (/getfile) ---
 @bot.message_handler(commands=['getfile'])
 def send_file(message):
-    # Игнорируем команды в общих чатах
-    if message.chat.type != 'private':
-        return
-
-    # Проверяем, что пишет Админ
-    if message.from_user.id != ADMIN_ID:
+    if message.chat.type != 'private' or message.from_user.id != ADMIN_ID:
         return
 
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, "rb") as file:
-                bot.send_document(message.chat.id, file, caption="📂 Список участников чата")
+                bot.send_document(message.chat.id, file, caption="📂 Резервная копия базы")
         else:
             bot.send_message(message.chat.id, "База пуста.")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
+# --- ВОССТАНОВИТЬ БАЗУ (Если админ кидает файл) ---
+@bot.message_handler(content_types=['document'])
+def restore_backup(message):
+    # Проверка: только в личке и только админ
+    if message.chat.type != 'private' or message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        # Сохраняем файл как users_db.json, перезаписывая старый
+        with open(DATA_FILE, 'wb') as new_file:
+            new_file.write(downloaded_file)
+        
+        bot.reply_to(message, "✅ База данных успешно восстановлена! Все люди на месте.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при загрузке: {e}")
+
+
 # ==========================================
-# 5. ГЛАВНАЯ ЛОГИКА
+# 5. ГЛАВНАЯ ЛОГИКА (ТЕПЕРЬ ВИДИТ ВСЁ)
 # ==========================================
-@bot.message_handler(func=lambda message: True)
+# Слушаем все типы контента, чтобы ловить всех
+@bot.message_handler(content_types=['audio', 'photo', 'voice', 'video', 'document', 'text', 'location', 'contact', 'sticker'])
 def handle_messages(message):
     try:
-        if not message.from_user or message.from_user.is_bot:
+        if not message.from_user:
+            return
+        
+        # Игнорируем других ботов
+        if message.from_user.is_bot:
             return
 
         user_id = message.from_user.id
         username = message.from_user.username or message.from_user.first_name
         chat_type = message.chat.type
-        text = message.text.lower() if message.text else ""
+        
+        # Получаем текст (для стикеров/фото он может быть в caption или пустой)
+        text = message.text.lower() if message.text else (message.caption.lower() if message.caption else "")
 
         # --- ЛОГИКА 1: СОХРАНЕНИЕ (ТОЛЬКО ИЗ ГРУПП) ---
-        # Мы сохраняем человека, ТОЛЬКО если сообщение пришло из группы
         if chat_type in ['group', 'supergroup']:
             is_new = save_new_user(user_id)
-            
             if is_new:
-                # Уведомляем админа, что в ГРУППЕ появился новый активный игрок
                 try:
                     alert = (f"🔔 <b>Новый игрок в чате!</b>\n"
-                             f"Кто: @{username}\nID: <code>{user_id}</code>")
+                             f"Кто: @{username}\nID: <code>{user_id}</code>\n"
+                             f"Группа: {message.chat.title}")
                     bot.send_message(ADMIN_ID, alert, parse_mode='HTML')
                 except:
                     pass
         
-        # Если пишут в личку (private) - мы просто игнорируем сохранение.
-        # (Ничего не делаем, база не засоряется)
-
         # --- ЛОГИКА 2: ОБРАБОТКА @all ---
         triggers = ['@all', '/all', 'everyone', 'все сюда']
         
-        if any(t in text for t in triggers):
+        # Если есть текст и триггер
+        if text and any(t in text for t in triggers):
             
-            # Проверяем права
             if user_id not in WHITELIST_IDS:
                 return
 
@@ -133,7 +152,6 @@ def handle_messages(message):
 
             bot.reply_to(message, "📢 <b>Внимание Альянс!</b>", parse_mode='HTML')
 
-            # Рассылка скрытых тегов
             chunk = ""
             count = 0
             for uid in users:
