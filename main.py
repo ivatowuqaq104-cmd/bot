@@ -9,9 +9,9 @@ from threading import Thread
 # ==========================================
 # 1. НАСТРОЙКИ
 # ==========================================
-TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"
-ADMIN_ID = 959119542          # Твой ID
-WHITELIST_IDS = [959119542, 7918250010, 7029781826]   # Кто может тегать всех
+TOKEN = "ТВОЙ_ТОКЕН_ЗДЕСЬ"
+ADMIN_ID = 959119542          # Твой ID (Главный админ бота)
+WHITELIST_IDS = [959119542]   # ID тех, кому можно ВСЁ (даже если не админ в чате)
 DATA_FILE = "users_db.json"   # Файл базы
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +26,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot v5.0 is running!"
+    return "Bot v6.0 (Admins Allowed) is running!"
 
 def run():
     try:
@@ -52,7 +52,6 @@ def load_users():
         return []
 
 def save_new_user(user_id):
-    """Сохраняет юзера и возвращает True, если он новенький."""
     users = load_users()
     if user_id not in users:
         users.append(user_id)
@@ -65,7 +64,7 @@ def save_new_user(user_id):
     return False
 
 # ==========================================
-# 4. АДМИНКА: СКАЧАТЬ И ЗАГРУЗИТЬ БАЗУ
+# 4. СЛУЖЕБНЫЕ КОМАНДЫ (ТОЛЬКО ДЛЯ ТЕБЯ)
 # ==========================================
 
 # --- СКАЧАТЬ БАЗУ (/getfile) ---
@@ -73,7 +72,6 @@ def save_new_user(user_id):
 def send_file(message):
     if message.chat.type != 'private' or message.from_user.id != ADMIN_ID:
         return
-
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, "rb") as file:
@@ -83,71 +81,86 @@ def send_file(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
-# --- ВОССТАНОВИТЬ БАЗУ (Если админ кидает файл) ---
+# --- ВОССТАНОВИТЬ БАЗУ (Файлом) ---
 @bot.message_handler(content_types=['document'])
 def restore_backup(message):
-    # Проверка: только в личке и только админ
     if message.chat.type != 'private' or message.from_user.id != ADMIN_ID:
         return
-
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-
-        # Сохраняем файл как users_db.json, перезаписывая старый
         with open(DATA_FILE, 'wb') as new_file:
             new_file.write(downloaded_file)
-        
-        bot.reply_to(message, "✅ База данных успешно восстановлена! Все люди на месте.")
+        bot.reply_to(message, "✅ База восстановлена!")
     except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка при загрузке: {e}")
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
+# --- СПИСОК ИМЕН (/list) ---
+@bot.message_handler(commands=['list'])
+def list_users(message):
+    if message.chat.type != 'private' or message.from_user.id != ADMIN_ID:
+        return
+    users = load_users()
+    text_report = f"Список ({len(users)} чел):\n"
+    for uid in users:
+        text_report += f"ID: {uid}\n"
+    if len(text_report) > 4000:
+        bot.send_message(message.chat.id, text_report[:4000])
+    else:
+        bot.send_message(message.chat.id, text_report)
 
 # ==========================================
-# 5. ГЛАВНАЯ ЛОГИКА (ТЕПЕРЬ ВИДИТ ВСЁ)
+# 5. ГЛАВНАЯ ЛОГИКА
 # ==========================================
-# Слушаем все типы контента, чтобы ловить всех
 @bot.message_handler(content_types=['audio', 'photo', 'voice', 'video', 'document', 'text', 'location', 'contact', 'sticker'])
 def handle_messages(message):
     try:
-        if not message.from_user:
-            return
-        
-        # Игнорируем других ботов
-        if message.from_user.is_bot:
+        if not message.from_user or message.from_user.is_bot:
             return
 
         user_id = message.from_user.id
         username = message.from_user.username or message.from_user.first_name
         chat_type = message.chat.type
-        
-        # Получаем текст (для стикеров/фото он может быть в caption или пустой)
+        # Безопасно получаем текст (даже если это картинка с подписью)
         text = message.text.lower() if message.text else (message.caption.lower() if message.caption else "")
 
-        # --- ЛОГИКА 1: СОХРАНЕНИЕ (ТОЛЬКО ИЗ ГРУПП) ---
+        # --- 1. СОХРАНЕНИЕ (ТОЛЬКО В ГРУППАХ) ---
         if chat_type in ['group', 'supergroup']:
             is_new = save_new_user(user_id)
             if is_new:
                 try:
-                    alert = (f"🔔 <b>Новый игрок в чате!</b>\n"
-                             f"Кто: @{username}\nID: <code>{user_id}</code>\n"
-                             f"Группа: {message.chat.title}")
-                    bot.send_message(ADMIN_ID, alert, parse_mode='HTML')
+                    bot.send_message(ADMIN_ID, f"🔔 Новый: {username} (ID: {user_id}) в {message.chat.title}")
                 except:
                     pass
-        
-        # --- ЛОГИКА 2: ОБРАБОТКА @all ---
+
+        # --- 2. КОМАНДА @all ---
         triggers = ['@all', '/all', 'everyone', 'все сюда']
         
-        # Если есть текст и триггер
         if text and any(t in text for t in triggers):
             
-            if user_id not in WHITELIST_IDS:
-                return
+            # === ПРОВЕРКА ПРАВ (НОВАЯ) ===
+            can_tag = False
+            
+            # А. Если ты в белом списке
+            if user_id in WHITELIST_IDS:
+                can_tag = True
+            # Б. Если ты Админ или Создатель чата
+            else:
+                try:
+                    chat_member = bot.get_chat_member(message.chat.id, user_id)
+                    if chat_member.status in ['administrator', 'creator']:
+                        can_tag = True
+                except Exception as e:
+                    logger.error(f"Не смог проверить права: {e}")
+            
+            # Если прав нет — выходим
+            if not can_tag:
+                return 
 
+            # Если права есть — погнали
             users = load_users()
             if not users:
-                bot.reply_to(message, "Список участников пуст.")
+                bot.reply_to(message, "Список пуст.")
                 return
 
             bot.reply_to(message, "📢 <b>Внимание Альянс!</b>", parse_mode='HTML')
