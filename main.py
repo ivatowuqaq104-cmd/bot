@@ -9,9 +9,9 @@ from threading import Thread
 # ==========================================
 # 1. НАСТРОЙКИ
 # ==========================================
-TOKEN = "ТВОЙ_ТОКЕН_ЗДЕСЬ"   # <--- ВСТАВЬ ТОКЕН
+TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"   # <--- ВСТАВЬ ТОКЕН
 ADMIN_ID = 959119542           # <--- ТВОЙ ID
-WHITELIST_IDS = [959119542]    # <--- ТВОЙ ID
+WHITELIST_IDS = [959119542, 7918250010, 7029781826]    # <--- ТВОЙ ID
 DATA_FILE = "users_db.json"
 
 logging.basicConfig(level=logging.INFO)
