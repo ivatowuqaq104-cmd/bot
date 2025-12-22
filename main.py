@@ -9,9 +9,9 @@ from threading import Thread
 # ==========================================
 # 1. НАСТРОЙКИ
 # ==========================================
-TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"   # <--- НЕ ЗАБУДЬ ВСТАВИТЬ ТОКЕН!
+TOKEN = "ТВОЙ_ТОКЕН_ЗДЕСЬ"   # <--- ВСТАВЬ ТОКЕН
 ADMIN_ID = 959119542           # <--- ТВОЙ ID
-WHITELIST_IDS = [959119542, 7918250010, 7029781826]    # <--- ТВОЙ ID
+WHITELIST_IDS = [959119542]    # <--- ТВОЙ ID
 DATA_FILE = "users_db.json"
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +26,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is strict and ready!"
+    return "Bot v6.3 (Names fixed) is running!"
 
 def run():
     try:
@@ -106,9 +106,13 @@ def handle_messages(message):
             return
 
         user_id = message.from_user.id
+        # --- ИСПРАВЛЕНИЕ: ВОЗВРАЩАЕМ ИМЯ ---
+        username = message.from_user.username
+        if not username:
+            username = message.from_user.first_name # Если нет ника, берем имя
+            
         chat_type = message.chat.type
         
-        # Получаем текст в нижнем регистре для проверки
         text_content = ""
         if message.text:
             text_content = message.text.lower()
@@ -120,21 +124,16 @@ def handle_messages(message):
             is_new = save_new_user(user_id)
             if is_new:
                 try:
-                    bot.send_message(ADMIN_ID, f"🔔 Новый ID: {user_id} из чата {message.chat.title}")
+                    # Теперь пишем имя и ID
+                    bot.send_message(ADMIN_ID, f"🔔 Новый: @{username} (ID: {user_id}) из чата {message.chat.title}")
                 except:
                     pass
 
         # 2. Обработка @all / /all
-        # --- ИСПРАВЛЕНО ЗДЕСЬ ---
-        # Оставляем только строгие команды со знаками.
-        # Убраны 'everyone', 'все сюда' и т.д.
         triggers = ['@all', '/all']
         
-        # Проверяем: если хотя бы один триггер есть внутри текста
-        # (Например: "Привет @all всем" сработает, а "Привет all" - НЕТ)
         if any(t in text_content for t in triggers):
             
-            # Проверка прав (Белый список ИЛИ Админ группы)
             can_tag = False
             if user_id in WHITELIST_IDS:
                 can_tag = True
@@ -149,7 +148,6 @@ def handle_messages(message):
             if not can_tag:
                 return
 
-            # Рассылка
             users = load_users()
             if not users:
                 bot.reply_to(message, "Список пуст.")
