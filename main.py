@@ -2,17 +2,18 @@ import telebot
 import os
 import time
 import logging
-import json
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from flask import Flask
 from threading import Thread
 
 # ==========================================
 # 1. НАСТРОЙКИ
 # ==========================================
-TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"   # <--- ВСТАВЬ ТОКЕН!
+TOKEN = "8566730754:AAEz4B5Zqz5fTVpbsSJu8saMoS4yoFsa1QM"   # <--- ВСТАВЬ НОВЫЙ ТОКЕН!
 ADMIN_ID = 959119542           # <--- ТВОЙ ID
-WHITELIST_IDS = [959119542, 7918250010, 7029781826]    # <--- ТВОЙ ID
-DATA_FILE = "users_db.json"
+WHITELIST_IDS = [959119542, 7918250010, 7029781826]    # <--- ID тех, кто может тегать
+SHEET_URL = "https://docs.google.com/spreadsheets/d/18z6dhYd72WpOLKN_-Mgxl6paR8ptxDaOuhUHtutFL6w/edit?hl=ru&gid=0#gid=0" # <--- ВСТАВЬ ССЫЛКУ ИЗ БРАУЗЕРА
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,13 +21,24 @@ logger = logging.getLogger(__name__)
 bot = telebot.TeleBot(TOKEN)
 
 # ==========================================
-# 2. ВЕБ-СЕРВЕР (Для Cron-Job)
+# 2. ПОДКЛЮЧЕНИЕ К GOOGLE ТАБЛИЦАМ
+# ==========================================
+# Файл credentials.json Render подтянет автоматически из Secret Files
+scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+client = gspread.authorize(creds)
+
+# Открываем таблицу по ссылке и берем первый лист
+sheet = client.open_by_url(SHEET_URL).sheet1
+
+# ==========================================
+# 3. ВЕБ-СЕРВЕР (Для Cron-Job)
 # ==========================================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot v7.0 (Auto-Backup) is running!"
+    return "Bot v8.0 (Google Sheets) is running!"
 
 def run():
     try:
@@ -39,94 +51,44 @@ def keep_alive():
     t.start()
 
 # ==========================================
-# 3. ФУНКЦИИ БАЗЫ ДАННЫХ + АВТОБЭКАП
+# 4. ФУНКЦИИ БАЗЫ ДАННЫХ (GOOGLE SHEETS)
 # ==========================================
 def load_users():
-    if not os.path.exists(DATA_FILE):
-        return []
+    """Загружает список ID из первого столбца таблицы"""
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get("users", [])
-    except:
+        records = sheet.col_values(1)
+        users = []
+        for r in records:
+            if r.isdigit(): # Игнорируем заголовок 'user_id' и пустые строки
+                users.append(int(r))
+        return users
+    except Exception as e:
+        logger.error(f"Ошибка чтения таблицы: {e}")
         return []
 
 def save_new_user(user_id):
-    """Сохраняет юзера и отправляет копию файла Админу"""
-    users = load_users()
-    if user_id not in users:
-        users.append(user_id)
-        try:
-            # 1. Сохраняем в файл
-            with open(DATA_FILE, "w", encoding="utf-8") as f:
-                json.dump({"users": users}, f, indent=4)
-            
-            # 2. ОТПРАВЛЯЕМ БЭКАП АДМИНУ (Чтобы не потерять при перезагрузке)
-            # Отправляем тихо, без звука, чтобы не долбить уведомлениями
-            try:
-                with open(DATA_FILE, "rb") as backup_file:
-                    bot.send_document(
-                        ADMIN_ID, 
-                        backup_file, 
-                        caption=f"💾 Авто-бэкап. Людей: {len(users)}",
-                        disable_notification=True
-                    )
-            except Exception as e:
-                logger.error(f"Не удалось отправить бэкап: {e}")
-
+    """Сохраняет нового юзера прямо в таблицу"""
+    try:
+        users = load_users()
+        if user_id not in users:
+            sheet.append_row([user_id])
             return True
-        except Exception as e:
-            logger.error(f"Save error: {e}")
-    return False
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка записи в таблицу: {e}")
+        return False
 
 # ==========================================
-# 4. АДМИНСКИЕ КОМАНДЫ (ВОССТАНОВЛЕНИЕ)
+# 5. АДМИНСКИЕ КОМАНДЫ
 # ==========================================
-
-# Команда /getfile (Вручную скачать базу)
-@bot.message_handler(commands=['getfile'])
-def send_file(message):
-    if message.chat.type == 'private' and message.from_user.id == ADMIN_ID:
-        try:
-            if os.path.exists(DATA_FILE):
-                with open(DATA_FILE, "rb") as file:
-                    bot.send_document(message.chat.id, file, caption="📂 Текущая база")
-            else:
-                bot.send_message(message.chat.id, "База пуста.")
-        except Exception as e:
-            bot.send_message(message.chat.id, f"Ошибка: {e}")
-
-# Команда /list (Посмотреть список)
 @bot.message_handler(commands=['list'])
 def list_users(message):
     if message.chat.type == 'private' and message.from_user.id == ADMIN_ID:
         users = load_users()
-        bot.send_message(message.chat.id, f"Всего в базе: {len(users)} чел.")
-
-# ВОССТАНОВЛЕНИЕ: Если Админ кидает файл json боту
-@bot.message_handler(content_types=['document'])
-def restore_backup(message):
-    if message.chat.type == 'private' and message.from_user.id == ADMIN_ID:
-        try:
-            file_name = message.document.file_name
-            if not file_name.endswith('.json'):
-                bot.reply_to(message, "❌ Это не json файл.")
-                return
-
-            file_info = bot.get_file(message.document.file_id)
-            downloaded_file = bot.download_file(file_info.file_path)
-            
-            with open(DATA_FILE, 'wb') as new_file:
-                new_file.write(downloaded_file)
-            
-            # Загружаем, чтобы проверить сколько там людей
-            users = load_users()
-            bot.reply_to(message, f"✅ База восстановлена! В ней {len(users)} человек.")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка: {e}")
+        bot.send_message(message.chat.id, f"📊 Всего в таблице: {len(users)} чел.")
 
 # ==========================================
-# 5. ГЛАВНАЯ ЛОГИКА (С ЗАЩИТОЙ ОТ ПАДЕНИЙ)
+# 6. ГЛАВНАЯ ЛОГИКА (@all)
 # ==========================================
 @bot.message_handler(content_types=['audio', 'photo', 'voice', 'video', 'document', 'text', 'location', 'contact', 'sticker'])
 def handle_messages(message):
@@ -135,27 +97,21 @@ def handle_messages(message):
             return
 
         user_id = message.from_user.id
-        # Определяем имя
-        username = message.from_user.username
-        if not username:
-            username = message.from_user.first_name
-
+        username = message.from_user.username or message.from_user.first_name
         chat_type = message.chat.type
         
-        # Безопасно берем текст
         text_content = ""
         if message.text:
             text_content = message.text.lower()
         elif message.caption:
             text_content = message.caption.lower()
 
-        # --- 1. СОХРАНЕНИЕ (ТОЛЬКО В ГРУППАХ) ---
+        # --- 1. СОХРАНЕНИЕ ---
         if chat_type in ['group', 'supergroup']:
             is_new = save_new_user(user_id)
             if is_new:
-                # Уведомление о новом игроке
                 try:
-                    bot.send_message(ADMIN_ID, f"🔔 Новый: @{username} (ID: {user_id}) из {message.chat.title}")
+                    bot.send_message(ADMIN_ID, f"🔔 Новый: @{username} (ID: {user_id}) из {message.chat.title}\n💾 Записан в Google Таблицу!")
                 except:
                     pass
 
@@ -174,14 +130,13 @@ def handle_messages(message):
                     if mem.status in ['creator', 'administrator']:
                         can_tag = True
                 except:
-                    can_tag = False
+                    pass
             
             if not can_tag:
                 return
 
             users = load_users()
             if not users:
-                # Оборачиваем ответ, чтобы не упал если сообщение удалено
                 try:
                     bot.reply_to(message, "Список пуст.")
                 except:
@@ -196,19 +151,28 @@ def handle_messages(message):
             chunk = ""
             count = 0
             for uid in users:
-                chunk += f"[🔔](tg://user?id={uid}) "
+                # Используем надежный HTML
+                chunk += f'<a href="tg://user?id={uid}">🔔</a> '
                 count += 1
                 if count % 5 == 0:
-                    bot.send_message(message.chat.id, chunk, parse_mode="Markdown")
+                    try:
+                        bot.send_message(message.chat.id, chunk, parse_mode="HTML")
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки тегов: {e}")
                     chunk = ""
+                    
+                    # СПАСИТЕЛЬНАЯ ПАУЗА: защищает от бана Telegram за спам (ошибка 429)
+                    time.sleep(1.5) 
+            
             if chunk:
-                bot.send_message(message.chat.id, chunk, parse_mode="Markdown")
+                try:
+                    bot.send_message(message.chat.id, chunk, parse_mode="HTML")
+                except Exception as e:
+                    logger.error(f"Ошибка отправки остатка тегов: {e}")
 
     except Exception as e:
         logger.error(f"CRITICAL ERROR in handler: {e}")
-        # Бот не упадет, просто запишет ошибку в лог
 
 if __name__ == "__main__":
     keep_alive()
-    # Добавляем restart_on_change, чтобы он был стабильнее
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
